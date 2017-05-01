@@ -14,9 +14,6 @@ namespace EfDataAccess
 	{
 		protected readonly TContext _context;
 
-		/* SLewis@jackhenry.com: I added the following constructor mainly for testing purposes. I needed the ability to initialize
-         * with a moq DBContext.
-         */
 		public BaseRepository(TContext context)
 		{
 			_context = context; _context.Configuration.ProxyCreationEnabled = false;
