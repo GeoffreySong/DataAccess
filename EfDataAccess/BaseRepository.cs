@@ -10,33 +10,49 @@ using System.Threading.Tasks;
 
 namespace EfDataAccess
 {
+	/// <summary>
+	/// Derived class for specific DbContext is mainly used for saving purpose.
+	/// lazy loading of related data is disabled	/// 
+	/// </summary>
+	/// <typeparam name="TContext"></typeparam>
 	public class BaseRepository<TContext> : IBaseRepository, IDisposable where TContext : DbContext, new()
 	{
 		protected readonly TContext _context;
 
-		public BaseRepository(TContext context)
-		{
-			_context = context; _context.Configuration.ProxyCreationEnabled = false;
-		}
+		public BaseRepository(TContext context)	{ _context = context; _context.Configuration.ProxyCreationEnabled = false; }
 
 		public BaseRepository() { _context = new TContext(); _context.Configuration.ProxyCreationEnabled = false; }
+
+		~BaseRepository() { if (_context != null) _context.Dispose(); }
+
+		public T StartTracking<T>(T entity) where T: class
+		{
+			_context.Set<T>().Attach(entity);
+			return entity;
+		}
+
+		public T EndTracking<T>(T entity) where T : class
+		{
+			var dbEntry = _context.Entry(entity);
+			if (dbEntry != null) dbEntry.State = EntityState.Detached;
+			return entity;
+		}
 
 		public T Get<T>(int id) where T : class
 		{
 			return _context.Set<T>().Find(id);
 		}
 
-		public List<T> GetAll<T>(string[] includes = null) where T : class
+		public List<T> GetAll<T>(params string[] includes) where T : class
 		{
 			var expre = CheckDataFilter<T>();
 			var query = _context.Set<T>() as IQueryable<T>;
-			if (includes != null)
+
+			foreach (var str in includes)
 			{
-				foreach (var str in includes)
-				{
-					query = query.Include(str);
-				}
+				query = query.Include(str);
 			}
+			
 			if (expre != null)
 			{
 				return query.Where(expre).ToList();
@@ -47,52 +63,19 @@ namespace EfDataAccess
 			}
 		}
 
-		public List<T> Find<T>(Expression<Func<T, bool>> predicate, string[] includes = null) where T : class
+		public List<T> Find<T>(Expression<Func<T, bool>> predicate, params string[] includes) where T : class
 		{
-			return FindInternal(predicate, includes).ToList();
+			return Filter(new Expression<Func<T, bool>>[] { predicate }, includes).ToList();
+		}
+
+		public List<T> Find<T>(Expression<Func<T, bool>>[] predicates, params string[] includes) where T : class
+		{
+			return Filter(predicates, includes).ToList();
 		}
 
 		public bool Any<T>(Expression<Func<T, bool>> predicate) where T : class
 		{
-			return FindInternal(predicate).Any();
-		}
-
-		private IQueryable<T> FindInternal<T>(Expression<Func<T, bool>> predicate, string[] includes = null) where T : class
-		{
-			var expre = CheckDataFilter<T>();
-			var query = _context.Set<T>() as IQueryable<T>;
-			if (includes != null)
-			{
-				foreach (var str in includes)
-				{
-					query = query.Include(str);
-				}
-			}
-			if (expre != null)
-			{
-				return query.Where(predicate).Where(expre);
-			}
-			else
-			{
-				return query.Where(predicate);
-			}
-		}
-
-		public List<T> Filter<T>(Expression<Func<T, bool>>[] predicates, string[] includes = null) where T : class
-		{
-			var query = _context.Set<T>() as IQueryable<T>;
-			if (includes != null)
-			{
-				foreach (var str in includes)
-				{
-					query = query.Include(str);
-				}
-			}
-			foreach (var predicate in predicates)
-			{
-				query = query.Where(predicate);
-			}
-			return query.ToList();
+			return Filter(new Expression<Func<T, bool>>[] { predicate }).Any();
 		}
 
 		public void Add<T>(T entity) where T : class
@@ -122,39 +105,22 @@ namespace EfDataAccess
 
 		public void SaveChanges()
 		{
-			SaveChanges();
+			_context.SaveChanges();			
 		}
 
 		public void SaveChanges(int userId)
 		{
-			DateTime now = DateTime.UtcNow;
+			var now = DateTime.UtcNow;
 			foreach (var entry in _context.ChangeTracker.Entries().Where(a => a.State == EntityState.Added))
 			{
-				SetValueOfProperty(entry.Entity, CRTDT, now);
-				SetValueOfProperty(entry.Entity, CRTBY, userId.ToString());
-				SetValueOfProperty(entry.Entity, UPTDT, now);
-				SetValueOfProperty(entry.Entity, UPTBY, userId.ToString());
+				SetCreatedFields(entry, now, userId);
+				SetCreatedFields(entry, now, userId);
 			}
+
 			foreach (var entry in _context.ChangeTracker.Entries().Where(a => a.State == EntityState.Modified))
 			{
-				SetValueOfProperty(entry.Entity, UPTDT, now);
-				SetValueOfProperty(entry.Entity, UPTBY, userId.ToString());
+				SetCreatedFields(entry, now, userId);
 			}
-
-			var errors = _context.GetValidationErrors();
-			if (errors.Any())
-			{
-				var errMsg = String.Empty;
-				foreach (var result in errors)
-				{
-					var entity = result.Entry.Entity;
-					var name = entity.GetType().Name;
-					var str = string.Join(", ", result.ValidationErrors.Select(a => a.ErrorMessage));
-					errMsg += name + ": " + str + Environment.NewLine;
-				}
-
-				throw new DbEntityValidationException(errMsg);
-			}			
 		}
 
 		public int GetSequenceNumber(string seqObject)
@@ -162,28 +128,36 @@ namespace EfDataAccess
 			return _context.Database.SqlQuery<int>("SELECT NEXT VALUE FOR dbo." + seqObject + ";").FirstOrDefault();
 		}
 
-		public string GetUserName(int userId)
-		{
-			using (var context = new TContext())
-			{
-				return context.Database.SqlQuery<string>("SELECT NAME FROM dbo.[User] Where UserId =" + userId + " ;").FirstOrDefault();
-			}
-		}
-
-		public string GetAccountNumber(int accountId)
-		{
-			using (var context = new TContext())
-			{
-				return context.Database.SqlQuery<string>("SELECT Number FROM dbo.Account Where AccountId =" + accountId + " ;").FirstOrDefault();
-			}
-		}
-
 		/********private methods********************************************************/
 		private const string CRTDT = "CreatedDate";
 		private const string CRTBY = "CreatedBy";
 		private const string UPTDT = "UpdatedDate";
 		private const string UPTBY = "UpdatedBy";
-		
+
+		private IQueryable<T> Filter<T>(Expression<Func<T, bool>>[] predicates, params string[] includes) where T : class
+		{
+			var expre = CheckDataFilter<T>();
+			var query = _context.Set<T>() as IQueryable<T>;
+			foreach (var str in includes)
+			{
+				query = query.Include(str);
+			}
+
+			foreach (var p in predicates)
+			{
+				query = query.Where(p);
+			}
+
+			if (expre != null)
+			{
+				return query.Where(expre);
+			}
+			else
+			{
+				return query;
+			}
+		}
+
 		private Expression<Func<TEntity, bool>> CheckDataFilter<TEntity>()
 		{
 			return null;
@@ -195,20 +169,21 @@ namespace EfDataAccess
 			deleted = context.ChangeTracker.Entries().Where(a => a.State == EntityState.Deleted).Select(b => b.Entity).ToList();
 			updated = context.ChangeTracker.Entries().Where(a => a.State == EntityState.Modified)
 				.Select(a => new Tuple<object, object>(a.OriginalValues.ToObject(), a.CurrentValues.ToObject())).ToList();
-
 		}
 
-		private bool SetValueOfProperty(object entity, string property, object value)
+		private void SetCreatedFields(System.Data.Entity.Infrastructure.DbEntityEntry entry, DateTime createdDate, int createdBy)
 		{
-			var propertyToSet = entity.GetType().GetProperty(property);
-			if (propertyToSet != null)
-			{
-				propertyToSet.SetValue(entity, value, null);
-				return true;
-			}
-			return false;
+			var type = entry.Entity.GetType();
+			if (type.GetProperty(CRTDT) != null) entry.Member(CRTDT).CurrentValue = createdDate;
+			if (type.GetProperty(CRTBY) != null) entry.Member(CRTBY).CurrentValue = createdBy;
 		}
 
+		private void SetUpdatedFields(System.Data.Entity.Infrastructure.DbEntityEntry entry, DateTime updatedDate, int updatedBy)
+		{
+			var type = entry.Entity.GetType();
+			if (type.GetProperty(UPTDT) != null) entry.Member(UPTDT).CurrentValue = updatedDate;
+			if (type.GetProperty(UPTBY) != null) entry.Member(UPTBY).CurrentValue = updatedBy;
+		}
 	}
 }
 
