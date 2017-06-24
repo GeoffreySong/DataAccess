@@ -216,6 +216,45 @@ namespace EfDataAccess
 			}
 		}
 
+		public List<T> ExecuteProc(string proc, params dynamic[] parameters)
+		{
+			using (var context = new TContext())
+			{
+				return context.Database.SqlQuery<T>(proc, parameters).ToList();
+			}
+		}
+
+		public Tuple<List<T1>, List<T2>> ExecuteProcedure<T1, T2>(string procedure, params dynamic[] parameters)
+		{
+			Tuple<List<T1>, List<T2>> rtn = null;
+			using (var context = new TContext())
+			{
+				var cmd = context.Database.Connection.CreateCommand();
+				cmd.CommandText = procedure;
+				foreach (var p in parameters)
+				{
+					cmd.Parameters.Add(p);
+				}
+				
+				try
+				{
+					context.Database.Connection.Open();
+					var reader = cmd.ExecuteReader();
+					var item1 = ((IObjectContextAdapter)context).ObjectContext.Translate<T1>(reader, typeof(T1).Name, System.Data.Entity.Core.Objects.MergeOption.AppendOnly).ToList();
+					reader.NextResult();
+					var item2 = ((IObjectContextAdapter)context).ObjectContext.Translate<T2>(reader, typeof(T2).Name, System.Data.Entity.Core.Objects.MergeOption.AppendOnly).ToList();
+
+					rtn = new Tuple<List<T1>, List<T2>> (item1, item2);
+				}
+				finally
+				{
+					context.Database.Connection.Close();
+				}
+			}
+
+			return rtn;
+		}
+
 		/*******Private methods********************************************************************/
 
 		private readonly string CRTDT = "CreatedDate";

@@ -20,7 +20,8 @@ namespace Dal.Interface
 		void RemoveRange(IEnumerable<T> entities);
 		void Update(T entity);
 		void Update(T entity, int userId);
-		int GetSequenceNumber(string seqObject);		
+		int GetSequenceNumber(string seqObject);
+		List<T> ExecuteProc(string procName, params dynamic[] parameters);
 	}
 }
 
